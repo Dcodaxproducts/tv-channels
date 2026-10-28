@@ -1,0 +1,60 @@
+name: Refresh channels and deploy
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch iptv-org data
+        run: |
+          mkdir -p work
+          for f in streams channels logos countries; do
+            curl -fsSL --retry 3 "https://iptv-org.github.io/api/$f.json" -o "work/$f.json"
+          done
+      - name: Health-check streams
+        run: python tools/check_streams.py work/streams.json work/channels.json work/working.json
+      - name: Build channel list
+        run: python tools/build_data.py work/working.json work/logos.json work/countries.json work/channels.json
+      - name: Keep the committed list if the new one looks wrong
+        run: python tools/merge_guard.py work/channels.json data/channels.json work/final.json
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp index.html style.css app.js icon.png .nojekyll _site/
+          cp -r vendor fonts _site/
+          mkdir _site/data
+          cp work/final.json _site/data/channels.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
